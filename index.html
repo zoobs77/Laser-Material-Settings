@@ -1,0 +1,593 @@
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { Zap, Wind, Gauge, Layers, Pencil, Save, RotateCcw, X, AlertTriangle, FlaskConical, ChevronDown, Scissors, Sparkles } from "lucide-react";
+
+// ---------------------------------------------------------------------------
+// Reference data — starting points for a 100W CO2 reference tube.
+// Nova 51 ships with several glass-tube wattages (60/80/100/130/150W); the
+// wattage selector below scales the power% so the effective energy density
+// stays roughly constant. These are starting points only — always test on
+// scrap and dial in from there.
+// ---------------------------------------------------------------------------
+const MATERIALS = [
+  { id: "birch-ply", name: "Baltic Birch Plywood", category: "Wood",
+    ops: {
+      cut: [
+        { thk: "3mm", speed: 20, power: 60, passes: 1, air: "High" },
+        { thk: "6mm", speed: 12, power: 75, passes: 1, air: "High" },
+        { thk: "9mm", speed: 8, power: 85, passes: 1, air: "High", notes: "2 passes if edge isn't clean through." },
+        { thk: "12mm", speed: 6, power: 95, passes: 2, air: "High" },
+      ],
+      engrave: [
+        { thk: "any", speed: 300, power: 25, passes: 1, air: "Low", notes: "Raise Z for slight defocus on wide fills." },
+      ],
+    } },
+  { id: "mdf", name: "MDF", category: "Wood",
+    ops: {
+      cut: [
+        { thk: "3mm", speed: 15, power: 65, passes: 1, air: "High" },
+        { thk: "6mm", speed: 8, power: 80, passes: 1, air: "High", notes: "Runs sooty — expect a dark edge." },
+      ],
+      engrave: [
+        { thk: "any", speed: 300, power: 30, passes: 1, air: "Low" },
+      ],
+    } },
+  { id: "hardwood", name: "Solid Hardwood (Oak / Walnut)", category: "Wood",
+    ops: {
+      cut: [
+        { thk: "6mm", speed: 7, power: 85, passes: 1, air: "High", notes: "Grain and resin content shift this a lot — test per board." },
+        { thk: "12mm", speed: 4, power: 95, passes: 2, air: "High" },
+      ],
+    } },
+  { id: "acrylic", name: "Cast Acrylic", category: "Plastic",
+    ops: {
+      cut: [
+        { thk: "3mm", speed: 15, power: 60, passes: 1, air: "Low", notes: "Low air keeps the cut edge glossy/flame-polished." },
+        { thk: "5mm", speed: 10, power: 75, passes: 1, air: "Low" },
+        { thk: "6mm", speed: 8, power: 80, passes: 1, air: "Low" },
+        { thk: "10mm", speed: 5, power: 90, passes: 1, air: "Low", notes: "2 passes if it won't pierce cleanly." },
+        { thk: "12mm", speed: 4, power: 95, passes: 2, air: "Low" },
+      ],
+      engrave: [
+        { thk: "any", speed: 300, power: 15, passes: 1, air: "Low", notes: "For a frosted engrave, lower power + defocus slightly." },
+      ],
+    } },
+  { id: "delrin", name: "Delrin / Acetal", category: "Plastic",
+    ops: {
+      cut: [
+        { thk: "3mm", speed: 10, power: 70, passes: 1, air: "High", notes: "Ventilate well — formaldehyde fumes when cut." },
+        { thk: "6mm", speed: 6, power: 85, passes: 1, air: "High", notes: "Ventilate well — formaldehyde fumes when cut." },
+      ],
+    } },
+  { id: "cardstock", name: "Cardstock / Paper", category: "Paper & Card",
+    ops: {
+      cut: [
+        { thk: "~0.3mm", speed: 40, power: 20, passes: 1, air: "Medium" },
+      ],
+    } },
+  { id: "cardboard", name: "Cardboard / Chipboard", category: "Paper & Card",
+    ops: {
+      cut: [
+        { thk: "3mm", speed: 20, power: 40, passes: 1, air: "Medium" },
+      ],
+    } },
+  { id: "cork", name: "Cork", category: "Paper & Card",
+    ops: {
+      cut: [{ thk: "3mm", speed: 15, power: 50, passes: 1, air: "Medium" }],
+      engrave: [{ thk: "any", speed: 300, power: 20, passes: 1, air: "Low" }],
+    } },
+  { id: "leather", name: "Vegetable-Tan Leather", category: "Leather & Fabric",
+    ops: {
+      cut: [
+        { thk: "2mm", speed: 12, power: 55, passes: 1, air: "Medium" },
+        { thk: "3-4mm", speed: 8, power: 70, passes: 1, air: "Medium" },
+      ],
+      engrave: [
+        { thk: "any", speed: 300, power: 30, passes: 1, air: "Off", notes: "Air off keeps contrast crisp on tooling marks." },
+      ],
+    } },
+  { id: "felt", name: "Felt / Cotton Fabric", category: "Leather & Fabric",
+    ops: {
+      cut: [
+        { thk: "3mm felt", speed: 25, power: 30, passes: 1, air: "Low", notes: "Low-tack transfer tape helps stop fraying." },
+        { thk: "cotton twill", speed: 30, power: 25, passes: 1, air: "Low" },
+      ],
+    } },
+  { id: "rubber", name: "Rubber Stamp Material", category: "Other",
+    ops: {
+      engrave: [{ thk: "any", speed: 200, power: 60, passes: 1, air: "Off" }],
+      cut: [{ thk: "6mm", speed: 6, power: 70, passes: 1, air: "Medium" }],
+    } },
+  { id: "foam", name: "EVA / Gasket Foam", category: "Other",
+    ops: {
+      cut: [
+        { thk: "3mm", speed: 20, power: 40, passes: 1, air: "Medium" },
+        { thk: "6mm", speed: 12, power: 55, passes: 1, air: "Medium" },
+      ],
+    } },
+  { id: "glass", name: "Glass (surface frosting)", category: "Metal & Glass",
+    ops: {
+      engrave: [{ thk: "any", speed: 300, power: 40, passes: 1, air: "Off", notes: "Lay a wet paper towel underneath — helps even frosting and stops chipping." }],
+    } },
+  { id: "anodized-al", name: "Anodized Aluminum", category: "Metal & Glass",
+    ops: {
+      engrave: [{ thk: "mark only", speed: 500, power: 70, passes: 1, air: "Off", notes: "Marks the anodized layer only — will not cut or mark bare aluminum." }],
+    } },
+  { id: "stainless", name: "Stainless Steel", category: "Metal & Glass",
+    ops: {
+      engrave: [{ thk: "mark only", speed: 200, power: 80, passes: 1, air: "Off", notes: "Needs a marking spray (e.g. Cermark) or anneal compound — CO2 can't mark bare steel directly, and can't cut metal at all." }],
+    } },
+];
+
+const WATTAGES = [60, 80, 100, 130, 150];
+const AIR_PSI = { High: "20-30 psi", Medium: "10-15 psi", Low: "5-8 psi", Off: "0 psi" };
+const CATEGORY_ORDER = ["Wood", "Plastic", "Paper & Card", "Leather & Fabric", "Metal & Glass", "Other"];
+const CATEGORY_COLORS = {
+  "Wood": "#E0954F",
+  "Plastic": "#4FD1E0",
+  "Paper & Card": "#F0CB4E",
+  "Leather & Fabric": "#E85D53",
+  "Metal & Glass": "#6E9BFA",
+  "Other": "#B57BE8",
+};
+
+// Palette (kept as plain values so every color is applied via inline style —
+// this preview environment only supports Tailwind's pre-built core classes,
+// not arbitrary-value classes like bg-[#123456], so those silently no-op).
+const C = {
+  bg1: "#1a1329", bg2: "#17182c", bg3: "#14212b",
+  panel: "#241b33",
+  panelSolid: "#241b33",
+  card: "#1c1730",
+  input: "#14101f",
+  border: "#4a4066",
+  borderDim: "#2c2640",
+  textDim: "#b6a8d6",
+  textDimmer: "#8477a3",
+  textFaint: "#9c8fc2",
+  textBody: "#e8e3f5",
+  textBright: "#f1ecff",
+  warn: "#5c3a3a",
+  warnBg1: "#3a1f1f",
+};
+
+function storageKey(materialId, op, thk) {
+  return `nova51:${materialId}:${op}:${thk}`.replace(/\s+/g, "_");
+}
+
+// ---------------------------------------------------------------------------
+// Custom dropdown — avoids native <select> popups (unreliable in some
+// embedded previews) and gives full control over the open list's styling.
+// All colors are inline styles (see note on C above).
+// ---------------------------------------------------------------------------
+function Dropdown({ value, options, onChange, grouped, accent }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const flat = grouped ? options.flatMap((g) => g.items) : options;
+  const current = flat.find((o) => o.value === value);
+
+  return (
+    <div style={{ position: "relative" }} ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center justify-between gap-2 rounded-lg px-3 py-2.5 transition-colors"
+        style={{ background: C.input, border: `1px solid ${open ? accent : C.border}`, color: C.textBright }}
+      >
+        <span className="flex items-center gap-2 truncate">
+          {current?.color && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: current.color }} />}
+          <span className="truncate">{current?.label || "Select..."}</span>
+        </span>
+        <ChevronDown size={16} style={{ opacity: 0.6, flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+      </button>
+
+      {open && (
+        <div
+          className="w-full rounded-lg overflow-y-auto"
+          style={{
+            position: "absolute",
+            zIndex: 50,
+            marginTop: 6,
+            maxHeight: 288,
+            border: `1px solid ${C.border}`,
+            background: C.panelSolid,
+            boxShadow: "0 20px 40px rgba(0,0,0,0.6)",
+          }}
+        >
+          {grouped
+            ? options.map((g) => (
+                <div key={g.label}>
+                  <div
+                    className="uppercase tracking-wider px-3 pt-2.5 pb-1"
+                    style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 10, color: CATEGORY_COLORS[g.label], background: C.panelSolid }}
+                  >
+                    {g.label}
+                  </div>
+                  {g.items.map((opt) => (
+                    <button
+                      type="button"
+                      key={opt.value}
+                      onClick={() => { onChange(opt.value); setOpen(false); }}
+                      className="w-full flex items-center gap-2 text-left px-3 py-2 text-sm transition-colors"
+                      style={{ color: opt.value === value ? CATEGORY_COLORS[g.label] : C.textBody, background: C.panelSolid }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.08)")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = C.panelSolid)}
+                    >
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: opt.color }} />
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              ))
+            : options.map((opt) => (
+                <button
+                  type="button"
+                  key={opt.value}
+                  onClick={() => { onChange(opt.value); setOpen(false); }}
+                  className="w-full text-left px-3 py-2.5 text-sm transition-colors"
+                  style={{ color: opt.value === value ? accent : C.textBody, background: C.panelSolid }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.08)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = C.panelSolid)}
+                >
+                  {opt.label}
+                </button>
+              ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Nova51Settings() {
+  const [watts, setWatts] = useState(100);
+  const [materialId, setMaterialId] = useState(MATERIALS[0].id);
+  const [operation, setOperation] = useState("cut");
+  const [thickness, setThickness] = useState(MATERIALS[0].ops.cut[0].thk);
+  const [override, setOverride] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(null);
+  const [status, setStatus] = useState("");
+
+  const material = useMemo(() => MATERIALS.find((m) => m.id === materialId), [materialId]);
+  const availableOps = useMemo(() => Object.keys(material.ops), [material]);
+
+  useEffect(() => {
+    if (!availableOps.includes(operation)) setOperation(availableOps[0]);
+  }, [materialId]); // eslint-disable-line
+
+  const thicknessList = material.ops[operation] || [];
+
+  useEffect(() => {
+    if (!thicknessList.find((t) => t.thk === thickness)) setThickness(thicknessList[0]?.thk || "");
+  }, [materialId, operation]); // eslint-disable-line
+
+  const baseEntry = thicknessList.find((t) => t.thk === thickness) || thicknessList[0];
+
+  useEffect(() => {
+    let cancelled = false;
+    setEditing(false);
+    setStatus("");
+    async function load() {
+      if (!baseEntry) return;
+      try {
+        const key = storageKey(materialId, operation, thickness);
+        const result = await window.storage.get(key, false);
+        if (!cancelled && result) setOverride(JSON.parse(result.value));
+        else if (!cancelled) setOverride(null);
+      } catch (e) {
+        if (!cancelled) setOverride(null);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [materialId, operation, thickness]); // eslint-disable-line
+
+  const active = override || baseEntry;
+  const catColor = CATEGORY_COLORS[material.category] || "#E0954F";
+  const scaledPower = active ? Math.min(100, Math.round((active.power * 100) / watts)) : 0;
+
+  function startEdit() {
+    setDraft({ ...active });
+    setEditing(true);
+  }
+
+  async function saveEdit() {
+    try {
+      const key = storageKey(materialId, operation, thickness);
+      const value = {
+        speed: Number(draft.speed),
+        power: Number(draft.power),
+        passes: Number(draft.passes),
+        air: draft.air,
+        notes: draft.notes || "",
+        thk: thickness,
+      };
+      const res = await window.storage.set(key, JSON.stringify(value), false);
+      if (res) {
+        setOverride(value);
+        setEditing(false);
+        setStatus("saved");
+      } else {
+        setStatus("error");
+      }
+    } catch (e) {
+      setStatus("error");
+    }
+  }
+
+  async function resetToDefault() {
+    try {
+      const key = storageKey(materialId, operation, thickness);
+      await window.storage.delete(key, false);
+    } catch (e) {
+      // ignore
+    }
+    setOverride(null);
+    setEditing(false);
+    setStatus("reset");
+  }
+
+  const materialOptions = CATEGORY_ORDER
+    .map((cat) => ({
+      label: cat,
+      items: MATERIALS.filter((m) => m.category === cat).map((m) => ({ value: m.id, label: m.name, color: CATEGORY_COLORS[cat] })),
+    }))
+    .filter((g) => g.items.length);
+
+  const thicknessOptions = thicknessList.map((t) => ({ value: t.thk, label: t.thk }));
+
+  return (
+    <div
+      className="min-h-screen p-4 sm:p-8"
+      style={{
+        position: "relative",
+        fontFamily: "'IBM Plex Sans', sans-serif",
+        color: C.textBright,
+        background: `radial-gradient(circle at 15% 0%, #2c1f45 0%, transparent 45%), radial-gradient(circle at 100% 10%, #123a42 0%, transparent 40%), radial-gradient(circle at 80% 100%, #3a1f30 0%, transparent 45%), linear-gradient(160deg, ${C.bg1} 0%, ${C.bg2} 45%, ${C.bg3} 100%)`,
+      }}
+    >
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500&display=swap');
+        .disp { font-family: 'IBM Plex Mono', monospace; }
+        .head { font-family: 'Oswald', sans-serif; letter-spacing: 0.02em; }
+      `}</style>
+
+      <div className="max-w-3xl mx-auto" style={{ position: "relative" }}>
+        {/* Header */}
+        <div className="flex items-center gap-3 mb-1">
+          <div className="w-2.5 h-2.5 rounded-full" style={{ background: catColor, boxShadow: `0 0 12px 3px ${catColor}99` }} />
+          <span className="disp text-xs tracking-[0.25em] uppercase" style={{ color: C.textDim }}>Thunder Laser · Reference Panel</span>
+        </div>
+        <h1 className="head text-4xl sm:text-5xl font-semibold mb-2" style={{ color: "#fff", textShadow: "0 0 30px rgba(224,149,79,0.25)" }}>NOVA 51</h1>
+        <p className="mb-5 max-w-lg" style={{ color: C.textDim }}>Power, speed, and air-assist starting points by material and thickness. Every laser tube runs a little differently — treat these as a first pass, then dial in on scrap.</p>
+
+        <div className="flex items-center gap-2 mb-7 flex-wrap">
+          {CATEGORY_ORDER.map((cat) => (
+            <span
+              key={cat}
+              className="disp text-[10px] uppercase tracking-wider px-2.5 py-1 rounded-full transition-colors"
+              style={
+                material.category === cat
+                  ? { border: `1px solid ${CATEGORY_COLORS[cat]}`, color: CATEGORY_COLORS[cat], background: `${CATEGORY_COLORS[cat]}22` }
+                  : { border: `1px solid ${C.border}`, color: C.textDimmer }
+              }
+            >
+              {cat}
+            </span>
+          ))}
+        </div>
+
+        {/* Wattage selector */}
+        <div className="mb-6">
+          <div className="disp text-xs uppercase tracking-widest mb-2" style={{ color: C.textDim }}>Your tube wattage</div>
+          <div className="flex gap-2 flex-wrap">
+            {WATTAGES.map((w) => (
+              <button
+                key={w}
+                onClick={() => setWatts(w)}
+                className="disp px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={
+                  watts === w
+                    ? { background: "linear-gradient(135deg, #FFB020, #FF5A3C)", border: "1px solid #FF5A3C", color: "#1a1329" }
+                    : { border: `1px solid ${C.border}`, color: C.textBody, background: "transparent" }
+                }
+              >
+                {w}W
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Material / operation / thickness selectors */}
+        <div className="grid sm:grid-cols-3 gap-3 mb-6">
+          <div className="sm:col-span-1">
+            <label className="disp text-xs uppercase tracking-widest mb-2 block" style={{ color: C.textDim }}>Material</label>
+            <Dropdown value={materialId} onChange={setMaterialId} options={materialOptions} grouped accent={catColor} />
+          </div>
+
+          <div>
+            <label className="disp text-xs uppercase tracking-widest mb-2 block" style={{ color: C.textDim }}>Operation</label>
+            <div className="flex gap-2">
+              {["cut", "engrave"].map((op) => {
+                const opColor = op === "cut" ? "#FF6A4D" : "#4FD1E0";
+                const isAvailable = availableOps.includes(op);
+                const isActive = operation === op;
+                return isAvailable ? (
+                  <button
+                    key={op}
+                    onClick={() => setOperation(op)}
+                    className="flex-1 flex items-center justify-center gap-1.5 capitalize disp px-3 py-2.5 rounded-lg text-sm transition-all"
+                    style={
+                      isActive
+                        ? { background: `${opColor}26`, border: `1px solid ${opColor}`, color: opColor, fontWeight: 600 }
+                        : { border: `1px solid ${C.border}`, color: C.textDimmer }
+                    }
+                  >
+                    {op === "cut" ? <Scissors size={14} /> : <Sparkles size={14} />}
+                    {op}
+                  </button>
+                ) : (
+                  <div key={op} className="flex-1 capitalize disp px-3 py-2.5 rounded-lg text-sm text-center select-none" style={{ border: `1px solid ${C.borderDim}`, color: "#4f4666" }}>
+                    {op}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="disp text-xs uppercase tracking-widest mb-2 block" style={{ color: C.textDim }}>Thickness</label>
+            <Dropdown value={thickness} onChange={setThickness} options={thicknessOptions} accent={catColor} />
+          </div>
+        </div>
+
+        {/* Readout panel */}
+        {active && !editing && (
+          <div
+            className="rounded-xl p-6 mb-4 transition-colors duration-500"
+            style={{
+              position: "relative",
+              overflow: "hidden",
+              border: `1px solid ${catColor}55`,
+              background: `linear-gradient(160deg, ${catColor}1f 0%, #1c1730cc 40%)`,
+            }}
+          >
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 2, background: `linear-gradient(90deg, transparent, ${catColor}, transparent)`, opacity: 0.8 }} />
+
+            <div className="flex items-start justify-between mb-6">
+              <div>
+                <div className="head text-xl" style={{ color: "#fff" }}>{material.name}</div>
+                <div className="disp text-sm capitalize font-medium" style={{ color: catColor }}>{operation} · {thickness}</div>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={startEdit} className="p-2 rounded-lg transition-colors" style={{ border: `1px solid ${C.border}`, color: C.textDim }} title="Edit and save your own settings">
+                  <Pencil size={16} />
+                </button>
+                {override && (
+                  <button onClick={resetToDefault} className="p-2 rounded-lg transition-colors" style={{ border: `1px solid ${C.border}`, color: C.textDim }} title="Reset to default">
+                    <RotateCcw size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
+              <Readout icon={<Gauge size={16} />} label="Speed" value={active.speed} unit="mm/s" color="#4FD1E0" />
+              <Readout icon={<Zap size={16} />} label="Power" value={`${scaledPower}`} unit="%" color="#FF9433" />
+              <Readout icon={<Layers size={16} />} label="Passes" value={active.passes} unit="" color="#B57BE8" />
+              <Readout icon={<Wind size={16} />} label="Air assist" value={active.air} unit={AIR_PSI[active.air] || ""} color="#6E9BFA" small />
+            </div>
+
+            <div className="mb-1">
+              <div className="h-2 rounded-full overflow-hidden" style={{ background: "rgba(0,0,0,0.3)" }}>
+                <div
+                  className="h-full rounded-full"
+                  style={{ width: `${scaledPower}%`, background: "linear-gradient(90deg, #FFD166, #FF9433, #FF5A3C)" }}
+                />
+              </div>
+            </div>
+
+            {watts !== 100 && (
+              <p className="disp text-xs mt-3" style={{ color: C.textFaint }}>Power scaled from a 100W baseline for your {watts}W tube. Re-check the first pass.</p>
+            )}
+
+            {active.notes && (
+              <div className="mt-4 flex gap-2 text-sm rounded-lg px-3 py-2.5" style={{ color: C.textBody, background: "rgba(0,0,0,0.25)", border: `1px solid ${C.border}` }}>
+                <FlaskConical size={16} style={{ flexShrink: 0, marginTop: 2, color: "#F0CB4E" }} />
+                <span>{active.notes}</span>
+              </div>
+            )}
+
+            {override && (
+              <div className="mt-3 disp text-xs" style={{ color: catColor }}>● your saved settings — not the default</div>
+            )}
+            {status === "reset" && <div className="mt-3 disp text-xs" style={{ color: C.textFaint }}>Reset to default.</div>}
+          </div>
+        )}
+
+        {/* Edit form */}
+        {editing && draft && (
+          <div className="rounded-xl p-6 mb-4" style={{ border: `2px solid ${catColor}`, background: C.card }}>
+            <div className="flex items-center justify-between mb-5">
+              <div className="head text-lg" style={{ color: "#fff" }}>Editing · {material.name} ({thickness})</div>
+              <button onClick={() => setEditing(false)} className="p-1.5 rounded" style={{ color: C.textDim }}>
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <Field label="Speed (mm/s)">
+                <input type="number" value={draft.speed} onChange={(e) => setDraft({ ...draft, speed: e.target.value })}
+                  className="w-full rounded-lg px-3 py-2 disp" style={{ background: C.input, border: `1px solid ${C.border}`, color: C.textBright }} />
+              </Field>
+              <Field label="Power (%)">
+                <input type="number" value={draft.power} onChange={(e) => setDraft({ ...draft, power: e.target.value })}
+                  className="w-full rounded-lg px-3 py-2 disp" style={{ background: C.input, border: `1px solid ${C.border}`, color: C.textBright }} />
+              </Field>
+              <Field label="Passes">
+                <input type="number" value={draft.passes} onChange={(e) => setDraft({ ...draft, passes: e.target.value })}
+                  className="w-full rounded-lg px-3 py-2 disp" style={{ background: C.input, border: `1px solid ${C.border}`, color: C.textBright }} />
+              </Field>
+              <Field label="Air assist">
+                <Dropdown
+                  value={draft.air}
+                  onChange={(v) => setDraft({ ...draft, air: v })}
+                  options={Object.keys(AIR_PSI).map((a) => ({ value: a, label: a }))}
+                  accent={catColor}
+                />
+              </Field>
+            </div>
+            <Field label="Notes">
+              <textarea value={draft.notes || ""} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} rows={2}
+                className="w-full rounded-lg px-3 py-2 text-sm" style={{ background: C.input, border: `1px solid ${C.border}`, color: C.textBright }} />
+            </Field>
+            <button
+              onClick={saveEdit}
+              className="mt-4 flex items-center gap-2 font-semibold disp px-4 py-2.5 rounded-lg transition-opacity hover:opacity-90"
+              style={{ background: "linear-gradient(135deg, #FFB020, #FF5A3C)", color: "#1a1329" }}
+            >
+              <Save size={16} /> Save my settings
+            </button>
+          </div>
+        )}
+
+        {/* Safety placard */}
+        <div className="flex gap-2.5 text-sm rounded-xl px-4 py-3 mt-2" style={{ color: C.textBody, border: `1px solid ${C.warn}`, background: `linear-gradient(135deg, ${C.warnBg1}cc, #241730cc)` }}>
+          <AlertTriangle size={18} style={{ flexShrink: 0, marginTop: 2, color: "#FF6A4D" }} />
+          <span>Never cut PVC, vinyl, or other chlorinated plastics — they release chlorine gas that's toxic to breathe and corrodes the machine's optics and rails. Always run with exhaust ventilation on and stay by the machine while it's cutting.</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Readout({ icon, label, value, unit, color, small }) {
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-1" style={{ color }}>
+        {icon}
+        <span className="disp text-[10px] uppercase tracking-wider" style={{ color: C.textDim }}>{label}</span>
+      </div>
+      <div className={`disp font-semibold ${small ? "text-lg" : "text-2xl"}`} style={{ color: color || "#fff" }}>
+        {value}
+        {unit && <span className="text-xs ml-1 font-normal" style={{ color: C.textDim }}>{unit}</span>}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <label className="disp text-[10px] uppercase tracking-wider mb-1.5 block" style={{ color: C.textDim }}>{label}</label>
+      {children}
+    </div>
+  );
+}
